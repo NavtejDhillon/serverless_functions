@@ -10,6 +10,7 @@ import FunctionsList from './components/FunctionsList'
 import SchedulesList from './components/SchedulesList'
 import FunctionUpload from './components/FunctionUpload'
 import CreateSchedule from './components/CreateSchedule'
+import FunctionDetails from './components/FunctionDetails'
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -63,6 +64,10 @@ function App() {
             
             <Route path="/functions" element={
               isAuthenticated ? <FunctionsList /> : <Navigate to="/login" />
+            } />
+            
+            <Route path="/functions/:functionName" element={
+              isAuthenticated ? <FunctionDetails /> : <Navigate to="/login" />
             } />
             
             <Route path="/functions/upload" element={

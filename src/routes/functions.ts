@@ -6,7 +6,11 @@ import {
   listFunctionFiles, 
   FUNCTIONS_DIR, 
   deleteFunction, 
-  compileTypeScriptFile 
+  compileTypeScriptFile,
+  extractDependencies,
+  installDependencies,
+  getFunctionEnv,
+  saveFunctionEnv
 } from '../services/fileSystem';
 import { executeFunction } from '../services/executor';
 
@@ -50,13 +54,36 @@ router.post('/upload', async (req: Request, res: Response) => {
     const functionName = path.basename(fileName, extension);
     const functionPath = path.join(FUNCTIONS_DIR, fileName);
 
+    // Extract dependencies from file content
+    const fileContent = functionFile.data.toString('utf-8');
+    const dependencies = extractDependencies(fileContent);
+
     // Move the file to the functions directory
     await functionFile.mv(functionPath);
+    
+    // Initialize response object
+    const responseObject: any = {
+      success: true,
+      function: {
+        name: functionName,
+        path: functionPath,
+        type: extension.substring(1), // Remove the leading dot
+        dependencies: dependencies
+      },
+      process: {
+        compilation: null,
+        dependencyInstallation: null
+      }
+    };
     
     // If it's a TypeScript file, try to compile it
     if (extension === '.ts') {
       try {
-        await compileTypeScriptFile(functionPath);
+        const compiledPath = await compileTypeScriptFile(functionPath);
+        responseObject.process.compilation = {
+          success: true,
+          output: `Compiled successfully to ${compiledPath}`
+        };
       } catch (compileError) {
         // Delete the uploaded file if compilation fails
         fs.unlinkSync(functionPath);
@@ -68,14 +95,25 @@ router.post('/upload', async (req: Request, res: Response) => {
       }
     }
     
-    res.json({ 
-      success: true,
-      function: {
-        name: functionName,
-        path: functionPath,
-        type: extension.substring(1) // Remove the leading dot
+    // Install dependencies if any were found
+    if (Object.keys(dependencies).length > 0) {
+      try {
+        const installResult = await installDependencies(functionName, dependencies);
+        responseObject.process.dependencyInstallation = {
+          success: true,
+          dependencies: dependencies,
+          output: installResult ? installResult.stdout : 'No dependencies to install'
+        };
+      } catch (error) {
+        responseObject.process.dependencyInstallation = {
+          success: false,
+          dependencies: dependencies,
+          error: error instanceof Error ? error.message : String(error)
+        };
       }
-    });
+    }
+
+    res.json(responseObject);
   } catch (error) {
     console.error('Error uploading function:', error);
     res.status(500).json({ 
@@ -137,6 +175,64 @@ router.post('/name/:functionName/execute', async (req: Request, res: Response) =
   } catch (error) {
     console.error('Error executing function:', error);
     res.status(500).json({ error: 'Failed to execute function' });
+  }
+});
+
+/**
+ * Get environment variables for a function
+ * GET /api/functions/:name/env
+ */
+router.get('/name/:functionName/env', (req: Request, res: Response) => {
+  try {
+    const functionName = req.params.functionName;
+    
+    if (!functionName) {
+      res.status(400).json({ error: 'Function name is required' });
+      return;
+    }
+    
+    const env = getFunctionEnv(functionName);
+    res.json(env);
+  } catch (error) {
+    console.error('Error getting environment variables:', error);
+    res.status(500).json({ error: 'Failed to get environment variables' });
+  }
+});
+
+/**
+ * Set environment variables for a function
+ * POST /api/functions/:name/env
+ */
+router.post('/name/:functionName/env', (req: Request, res: Response) => {
+  try {
+    const functionName = req.params.functionName;
+    const envVars = req.body;
+    
+    if (!functionName) {
+      res.status(400).json({ error: 'Function name is required' });
+      return;
+    }
+    
+    if (!envVars || typeof envVars !== 'object') {
+      res.status(400).json({ error: 'Environment variables must be provided as an object' });
+      return;
+    }
+    
+    const success = saveFunctionEnv(functionName, envVars);
+    
+    if (!success) {
+      res.status(500).json({ error: 'Failed to save environment variables' });
+      return;
+    }
+    
+    res.json({ 
+      success: true,
+      message: 'Environment variables saved successfully',
+      variables: envVars
+    });
+  } catch (error) {
+    console.error('Error setting environment variables:', error);
+    res.status(500).json({ error: 'Failed to set environment variables' });
   }
 });
 

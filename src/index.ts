@@ -21,7 +21,7 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: ['http://localhost:5173', 'https://functions.decentralize.nz', 'http://functions.decentralize.nz'],
   credentials: true
 }));
 app.use(express.json());
@@ -41,8 +41,10 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 1000 * 60 * 60 * 24 // 24 hours
-  }
+  },
+  proxy: true // Trust proxy headers
 }));
 
 // Serve static files

@@ -7,6 +7,7 @@ interface FunctionItem {
   type: string;
   size?: number;
   lastModified?: string;
+  dependencies?: Record<string, string>;
 }
 
 const FunctionsList = () => {
@@ -113,14 +114,31 @@ const FunctionsList = () => {
                 <div key={fn.name} className="list-group-item">
                   <div className="d-flex justify-content-between align-items-center">
                     <div>
-                      <h5 className="mb-1">{fn.name}</h5>
+                      <h5 className="mb-1">
+                        <Link to={`/functions/${fn.name}`} className="text-decoration-none">
+                          {fn.name}
+                        </Link>
+                      </h5>
                       <small className="text-muted">
                         Type: {fn.type} | 
                         {fn.size && ` Size: ${Math.round(fn.size / 1024)} KB | `}
                         {fn.lastModified && ` Modified: ${new Date(fn.lastModified).toLocaleString()}`}
+                        {fn.dependencies && Object.keys(fn.dependencies).length > 0 && (
+                          <div className="mt-1">
+                            <small className="text-muted">
+                              Dependencies: {Object.keys(fn.dependencies).join(', ')}
+                            </small>
+                          </div>
+                        )}
                       </small>
                     </div>
                     <div>
+                      <Link 
+                        to={`/functions/${fn.name}`}
+                        className="btn btn-sm btn-info me-2"
+                      >
+                        Details
+                      </Link>
                       <button
                         className="btn btn-sm btn-primary me-2"
                         onClick={() => executeFunction(fn.name)}

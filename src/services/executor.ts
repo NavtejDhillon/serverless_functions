@@ -1,11 +1,12 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
-import { FUNCTIONS_DIR, DIST_FUNCTIONS_DIR, compileTypeScriptFile } from './fileSystem';
+import { FUNCTIONS_DIR, DIST_FUNCTIONS_DIR, compileTypeScriptFile, getFunctionEnv } from './fileSystem';
 
 interface ExecuteOptions {
   input?: any;
   timeout?: number;
+  env?: Record<string, string>;
 }
 
 /**
@@ -15,7 +16,7 @@ export const executeFunction = async (
   functionName: string,
   options: ExecuteOptions = {}
 ): Promise<{ output: string; error: string; exitCode: number }> => {
-  const { input = {}, timeout = 30000 } = options;
+  const { input = {}, timeout = 30000, env = {} } = options;
   
   try {
     // Check if function exists
@@ -31,6 +32,9 @@ export const executeFunction = async (
     } else {
       throw new Error(`Function ${functionName} not found`);
     }
+    
+    // Get function-specific environment variables
+    const functionEnv = getFunctionEnv(functionName);
     
     // Create a wrapped script to execute the function in a sandboxed context
     const tmpScriptPath = path.join(process.cwd(), 'tmp', `${functionName}_exec.js`);
@@ -69,9 +73,17 @@ export const executeFunction = async (
       let error = '';
       let timeoutId: NodeJS.Timeout;
       
-      // Create child process
+      // Merge system env, custom env and function-specific env
+      const processEnv = {
+        ...process.env,
+        ...env,
+        ...functionEnv
+      };
+      
+      // Create child process with environment variables
       const child = spawn('node', [tmpScriptPath, JSON.stringify(input)], {
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: processEnv
       });
       
       // Capture output
