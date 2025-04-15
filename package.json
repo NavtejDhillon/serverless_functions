@@ -8,6 +8,8 @@
     "dev": "ts-node src/index.ts",
     "dev:all": "concurrently \"npm run dev\" \"cd frontend && npm run dev\"",
     "build": "tsc --skipLibCheck",
+    "build:frontend": "cd frontend && npm install && npm run build",
+    "build:all": "node scripts/build.js",
     "build-no-types": "ts-node --transpile-only scripts/build.js",
     "watch": "tsc -w"
   },
