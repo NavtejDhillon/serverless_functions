@@ -1,0 +1,376 @@
+---
+title: 'Serverless Function Development Guide'
+description: 'Learn how to develop and schedule serverless functions for our platform'
+date: '2025-04-15'
+---
+
+# Serverless Function Development Guide
+
+## Basic Function Structure
+
+Functions should be JavaScript (`.js`) or TypeScript (`.ts`) files with a default export:
+
+```javascript
+/**
+ * @param {object} input - Input data passed to the function
+ * @returns {string|object} - Function output
+ */
+function myFunction(input) {
+  // Your code here
+  console.log('Function executed with input:', input);
+  
+  // Return a result
+  return {
+    message: 'Function executed successfully',
+    timestamp: new Date().toISOString(),
+    input: input
+  };
+}
+
+// Export the function (REQUIRED)
+module.exports = myFunction;
+```
+
+## Self-Scheduling Functions
+
+To create a function that schedules itself:
+
+```javascript
+const https = require('https');
+
+/**
+ * Function that schedules itself to run again
+ */
+async function scheduledTask(input) {
+  console.log('Running scheduled task at:', new Date().toISOString());
+  
+  // Perform your task
+  const result = await doSomething();
+  
+  // Schedule the next execution
+  await createSchedule('scheduledTask', '0 */2 * * *', { lastRun: new Date().toISOString() });
+  
+  return {
+    status: 'success',
+    result: result,
+    nextRun: 'Scheduled for every 2 hours'
+  };
+}
+
+/**
+ * Helper function to create a schedule
+ */
+async function createSchedule(functionName, cronExpression, input) {
+  return new Promise((resolve, reject) => {
+    // Create request payload
+    const data = JSON.stringify({
+      functionName: functionName,
+      cronExpression: cronExpression, // Cron format: minute hour day-of-month month day-of-week
+      active: true,
+      input: input,
+      description: `Auto-scheduled by ${functionName}`
+    });
+    
+    // API request options
+    const options = {
+      hostname: 'localhost',
+      port: 3000,
+      path: '/api/schedules',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': data.length
+      }
+    };
+    
+    // Send the request
+    const req = https.request(options, (res) => {
+      let responseData = '';
+      
+      res.on('data', (chunk) => {
+        responseData += chunk;
+      });
+      
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(JSON.parse(responseData));
+        } else {
+          reject(new Error(`Failed to create schedule: ${responseData}`));
+        }
+      });
+    });
+    
+    req.on('error', (error) => {
+      reject(error);
+    });
+    
+    req.write(data);
+    req.end();
+  });
+}
+
+module.exports = scheduledTask;
+```
+
+## Cron Expression Reference
+
+Cron expressions are used to define when scheduled functions run. They consist of five fields:
+
+<div className="overflow-x-auto">
+  <table className="min-w-full bg-white border border-gray-300 rounded-md">
+    <thead className="bg-gray-100">
+      <tr>
+        <th className="px-4 py-2 border-b">Field</th>
+        <th className="px-4 py-2 border-b">Values</th>
+        <th className="px-4 py-2 border-b">Special Characters</th>
+        <th className="px-4 py-2 border-b">Example</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td className="px-4 py-2 border-b">Minute</td>
+        <td className="px-4 py-2 border-b">0-59</td>
+        <td className="px-4 py-2 border-b">* , - /</td>
+        <td className="px-4 py-2 border-b">30 (at minute 30)</td>
+      </tr>
+      <tr>
+        <td className="px-4 py-2 border-b">Hour</td>
+        <td className="px-4 py-2 border-b">0-23</td>
+        <td className="px-4 py-2 border-b">* , - /</td>
+        <td className="px-4 py-2 border-b">12 (at 12pm)</td>
+      </tr>
+      <tr>
+        <td className="px-4 py-2 border-b">Day of Month</td>
+        <td className="px-4 py-2 border-b">1-31</td>
+        <td className="px-4 py-2 border-b">* , - / ?</td>
+        <td className="px-4 py-2 border-b">15 (on the 15th)</td>
+      </tr>
+      <tr>
+        <td className="px-4 py-2 border-b">Month</td>
+        <td className="px-4 py-2 border-b">1-12</td>
+        <td className="px-4 py-2 border-b">* , - /</td>
+        <td className="px-4 py-2 border-b">6 (in June)</td>
+      </tr>
+      <tr>
+        <td className="px-4 py-2 border-b">Day of Week</td>
+        <td className="px-4 py-2 border-b">0-6 (Sunday=0)</td>
+        <td className="px-4 py-2 border-b">* , - / ?</td>
+        <td className="px-4 py-2 border-b">1 (on Monday)</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+### Common Cron Expression Examples
+
+<div className="overflow-x-auto mt-4">
+  <table className="min-w-full bg-white border border-gray-300 rounded-md">
+    <thead className="bg-gray-100">
+      <tr>
+        <th className="px-4 py-2 border-b">Cron Expression</th>
+        <th className="px-4 py-2 border-b">Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td className="px-4 py-2 border-b font-mono">`* * * * *`</td>
+        <td className="px-4 py-2 border-b">Every minute</td>
+      </tr>
+      <tr>
+        <td className="px-4 py-2 border-b font-mono">`0 * * * *`</td>
+        <td className="px-4 py-2 border-b">Every hour at minute 0</td>
+      </tr>
+      <tr>
+        <td className="px-4 py-2 border-b font-mono">`0 0 * * *`</td>
+        <td className="px-4 py-2 border-b">Daily at midnight</td>
+      </tr>
+      <tr>
+        <td className="px-4 py-2 border-b font-mono">`0 12 * * *`</td>
+        <td className="px-4 py-2 border-b">Daily at noon</td>
+      </tr>
+      <tr>
+        <td className="px-4 py-2 border-b font-mono">`0 0 * * 0`</td>
+        <td className="px-4 py-2 border-b">Weekly on Sunday at midnight</td>
+      </tr>
+      <tr>
+        <td className="px-4 py-2 border-b font-mono">`0 0 1 * *`</td>
+        <td className="px-4 py-2 border-b">Monthly on the 1st at midnight</td>
+      </tr>
+      <tr>
+        <td className="px-4 py-2 border-b font-mono">`0 0 1 1 *`</td>
+        <td className="px-4 py-2 border-b">Yearly on January 1st at midnight</td>
+      </tr>
+      <tr>
+        <td className="px-4 py-2 border-b font-mono">`*/5 * * * *`</td>
+        <td className="px-4 py-2 border-b">Every 5 minutes</td>
+      </tr>
+      <tr>
+        <td className="px-4 py-2 border-b font-mono">`0 9-17 * * 1-5`</td>
+        <td className="px-4 py-2 border-b">Every hour from 9am-5pm, Monday to Friday</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+## Best Practices
+
+<div className="my-4 p-4 bg-blue-50 border-l-4 border-blue-500 rounded">
+  <h3 className="text-lg font-semibold text-blue-700">Error Handling</h3>
+  <p>Always include try/catch blocks for robust error handling</p>
+  
+  ```javascript
+  try {
+    // Your function logic
+  } catch (error) {
+    console.error('Error occurred:', error);
+    return { error: error.message };
+  }
+  ```
+</div>
+
+<div className="my-4 p-4 bg-green-50 border-l-4 border-green-500 rounded">
+  <h3 className="text-lg font-semibold text-green-700">Logging</h3>
+  <p>Use console.log for debugging (logs are captured by the platform)</p>
+  
+  ```javascript
+  console.log('Starting function execution');
+  console.log('Processing data:', JSON.stringify(data));
+  console.error('Error occurred:', error);
+  ```
+</div>
+
+<div className="my-4 p-4 bg-yellow-50 border-l-4 border-yellow-500 rounded">
+  <h3 className="text-lg font-semibold text-yellow-700">Idempotency</h3>
+  <p>Design functions to be idempotent (can run multiple times safely)</p>
+  
+  ```javascript
+  // Check if already processed
+  if (await isAlreadyProcessed(input.id)) {
+    return { status: 'already_processed', id: input.id };
+  }
+  
+  // Process data
+  const result = await processData(input);
+  
+  // Mark as processed
+  await markAsProcessed(input.id);
+  ```
+</div>
+
+<div className="my-4 p-4 bg-purple-50 border-l-4 border-purple-500 rounded">
+  <h3 className="text-lg font-semibold text-purple-700">Timeouts</h3>
+  <p>Keep execution time reasonable to avoid blocking other functions</p>
+  
+  ```javascript
+  // Use async/await with Promise.race for timeout
+  const result = await Promise.race([
+    yourLongRunningTask(),
+    new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Function timed out')), 30000)
+    )
+  ]);
+  ```
+</div>
+
+<div className="my-4 p-4 bg-red-50 border-l-4 border-red-500 rounded">
+  <h3 className="text-lg font-semibold text-red-700">Dependencies</h3>
+  <p>Avoid external dependencies when possible</p>
+  
+  ```javascript
+  // Use built-in modules
+  const fs = require('fs');
+  const https = require('https');
+  const { promisify } = require('util');
+  
+  // Instead of third-party libraries when possible
+  ```
+</div>
+
+## Example: Data Processing Function
+
+```javascript
+/**
+ * Process data and schedule next processing
+ */
+async function processData(input) {
+  try {
+    console.log('Starting data processing job');
+    
+    // Process step 1: Fetch data
+    const data = await fetchDataFromSource(input.sourceUrl);
+    
+    // Process step 2: Transform data
+    const transformedData = transformData(data);
+    
+    // Process step 3: Save results
+    const saveResult = await saveProcessedData(transformedData);
+    
+    // Schedule next run (daily at 3am)
+    if (input.scheduleNext !== false) {
+      await createSchedule('processData', '0 3 * * *', { 
+        sourceUrl: input.sourceUrl, 
+        lastRun: new Date().toISOString()
+      });
+    }
+    
+    return {
+      success: true,
+      processedRecords: transformedData.length,
+      savedRecords: saveResult.count
+    };
+  } catch (error) {
+    console.error('Error in data processing:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// Helper functions would be implemented here...
+
+module.exports = processData;
+```
+
+## Deploying Functions
+
+<div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+  <div className="bg-white p-4 rounded-lg shadow">
+    <div className="flex items-center mb-2">
+      <div className="rounded-full bg-blue-500 w-8 h-8 flex items-center justify-center text-white font-bold mr-2">1</div>
+      <h3 className="text-lg font-semibold">Create Function</h3>
+    </div>
+    <p>Save your function in a `.js` or `.ts` file with proper exports</p>
+  </div>
+  
+  <div className="bg-white p-4 rounded-lg shadow">
+    <div className="flex items-center mb-2">
+      <div className="rounded-full bg-blue-500 w-8 h-8 flex items-center justify-center text-white font-bold mr-2">2</div>
+      <h3 className="text-lg font-semibold">Upload</h3>
+    </div>
+    <p>Upload through the web UI at `/functions/upload`</p>
+  </div>
+  
+  <div className="bg-white p-4 rounded-lg shadow">
+    <div className="flex items-center mb-2">
+      <div className="rounded-full bg-blue-500 w-8 h-8 flex items-center justify-center text-white font-bold mr-2">3</div>
+      <h3 className="text-lg font-semibold">Test</h3>
+    </div>
+    <p>Test execution manually before scheduling</p>
+  </div>
+  
+  <div className="bg-white p-4 rounded-lg shadow">
+    <div className="flex items-center mb-2">
+      <div className="rounded-full bg-blue-500 w-8 h-8 flex items-center justify-center text-white font-bold mr-2">4</div>
+      <h3 className="text-lg font-semibold">Schedule</h3>
+    </div>
+    <p>Create schedules via the UI or programmatically</p>
+  </div>
+</div>
+
+export const metadata = {
+  author: 'Development Team',
+  lastUpdated: new Date().toISOString().split('T')[0]
+};
+
+export default ({ children }) => <div className="prose max-w-none">{children}</div>; 

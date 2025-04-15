@@ -1,0 +1,47 @@
+{
+  "name": "serverless",
+  "version": "1.0.0",
+  "description": "Lightweight serverless function platform",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "dev:all": "concurrently \"npm run dev\" \"cd frontend && npm run dev\"",
+    "build": "tsc --skipLibCheck",
+    "build-no-types": "ts-node --transpile-only scripts/build.js",
+    "watch": "tsc -w"
+  },
+  "keywords": [
+    "serverless",
+    "functions",
+    "node",
+    "typescript"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-fileupload": "^1.4.3",
+    "express-session": "^1.17.3",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "node-cron": "^3.0.3",
+    "path-to-regexp": "^6.2.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/express-fileupload": "^1.4.4",
+    "@types/express-session": "^1.17.10",
+    "@types/jsonwebtoken": "^9.0.5",
+    "@types/node": "^20.10.6",
+    "@types/node-cron": "^3.0.11",
+    "concurrently": "^9.1.2"
+  }
+}
