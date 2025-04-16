@@ -47,8 +47,8 @@ export const executeFunction = async (
   functionName: string,
   options: ExecuteOptions = {}
 ): Promise<{ output: string; error: string; exitCode: number; result?: any }> => {
-  // Default timeout is 30 seconds
-  const defaultTimeout = 30000;
+  // Default timeout is 30 minutes
+  const defaultTimeout = 1800000;
   let { input = {}, timeout = defaultTimeout, env = {} } = options;
   
   try {
