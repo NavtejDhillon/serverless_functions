@@ -108,14 +108,30 @@ export const executeFunction = async (
 
       // Capture user function output
       console.log = function() {
-        userFunctionOutput.push(Array.from(arguments).join(' '));
+        const args = Array.from(arguments);
+        const message = args.map(arg => 
+          typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+        ).join(' ');
+        
+        userFunctionOutput.push(message);
+        // Still log to console for debugging
         originalConsoleLog.apply(console, arguments);
       };
       
       console.error = function() {
-        userFunctionOutput.push('ERROR: ' + Array.from(arguments).join(' '));
+        const args = Array.from(arguments);
+        const message = 'ERROR: ' + args.map(arg => 
+          typeof arg === 'object' && arg instanceof Error ? arg.stack || arg.message : 
+          typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+        ).join(' ');
+        
+        userFunctionOutput.push(message);
+        // Still log to console for debugging
         originalConsoleError.apply(console, arguments);
       };
+      
+      // Execute the function and store its result
+      let functionResult;
       
       const userFunction = require('${executablePath.replace(/\\/g, '\\\\')}');
       
@@ -134,18 +150,38 @@ export const executeFunction = async (
       // Execute the function
       Promise.resolve(fnToExecute(input))
         .then(result => {
+          functionResult = result;
+          
           // Print a separator before the actual result to help differentiate from module resolution logs
           originalConsoleLog('\\n----- FUNCTION OUTPUT -----');
-          userFunctionOutput.forEach(line => originalConsoleLog(line));
+          if (userFunctionOutput.length > 0) {
+            userFunctionOutput.forEach(line => originalConsoleLog(line));
+          } else {
+            originalConsoleLog('(No console output from function)');
+          }
+          
           originalConsoleLog('----- FUNCTION RESULT -----');
-          originalConsoleLog(JSON.stringify(result));
+          originalConsoleLog(JSON.stringify(result, null, 2));
           originalConsoleLog('----- END FUNCTION OUTPUT -----\\n');
+          
+          // Send the result back as JSON for proper parsing
+          console.log = originalConsoleLog;  // Restore original console
+          console.log(JSON.stringify(result));
           process.exit(0);
         })
         .catch(error => {
+          // Print a separator before the actual error to help differentiate from module resolution logs
           originalConsoleError('\\n----- FUNCTION ERROR -----');
-          originalConsoleError(error.message || error);
+          originalConsoleError(error.stack || error.message || error);
+          if (userFunctionOutput.length > 0) {
+            originalConsoleLog('\\n----- CONSOLE OUTPUT BEFORE ERROR -----');
+            userFunctionOutput.forEach(line => originalConsoleLog(line));
+          }
           originalConsoleError('----- END FUNCTION ERROR -----\\n');
+          
+          // Send the error back in a structured format
+          console.error = originalConsoleError;  // Restore original console
+          console.error(error.message || error);
           process.exit(1);
         });
     `;
