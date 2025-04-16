@@ -10,13 +10,46 @@ interface ExecuteOptions {
 }
 
 /**
+ * Parse function metadata from JSDoc comments
+ * @param {string} filePath - Path to the function file
+ * @returns {Object} Metadata object with properties like timeout
+ */
+export const parseFunctionMetadata = (filePath: string): Record<string, any> => {
+  const metadata: Record<string, any> = {};
+  
+  try {
+    if (!fs.existsSync(filePath)) {
+      return metadata;
+    }
+    
+    const content = fs.readFileSync(filePath, 'utf-8');
+    
+    // Look for @timeout tag in JSDoc comments
+    const timeoutMatch = content.match(/@timeout\s+(\d+)s?/);
+    if (timeoutMatch && timeoutMatch[1]) {
+      // Convert timeout to milliseconds
+      const timeoutSeconds = parseInt(timeoutMatch[1], 10);
+      metadata.timeout = timeoutSeconds * 1000;
+      console.log(`Found timeout metadata: ${timeoutSeconds}s (${metadata.timeout}ms)`);
+    }
+    
+    return metadata;
+  } catch (error) {
+    console.error(`Error parsing function metadata: ${error}`);
+    return metadata;
+  }
+};
+
+/**
  * Execute a function in a standardized ESM environment
  */
 export const executeFunction = async (
   functionName: string,
   options: ExecuteOptions = {}
 ): Promise<{ output: string; error: string; exitCode: number; result?: any }> => {
-  const { input = {}, timeout = 30000, env = {} } = options;
+  // Default timeout is 30 seconds
+  const defaultTimeout = 30000;
+  let { input = {}, timeout = defaultTimeout, env = {} } = options;
   
   try {
     // Check if function exists
@@ -26,9 +59,23 @@ export const executeFunction = async (
     
     if (fs.existsSync(jsPath)) {
       executablePath = jsPath;
+      
+      // Parse metadata to get custom timeout
+      const metadata = parseFunctionMetadata(jsPath);
+      if (metadata.timeout && !options.timeout) {
+        timeout = metadata.timeout;
+        console.log(`Using custom timeout from metadata: ${timeout}ms`);
+      }
     } else if (fs.existsSync(tsPath)) {
       // Compile TypeScript file and get the path to the compiled JS
       executablePath = await compileTypeScriptFile(tsPath);
+      
+      // Parse metadata to get custom timeout
+      const metadata = parseFunctionMetadata(tsPath);
+      if (metadata.timeout && !options.timeout) {
+        timeout = metadata.timeout;
+        console.log(`Using custom timeout from metadata: ${timeout}ms`);
+      }
     } else {
       throw new Error(`Function ${functionName} not found`);
     }
@@ -44,6 +91,7 @@ export const executeFunction = async (
     const hasCustomModules = fs.existsSync(functionNodeModulesDir);
     
     console.log(`Looking for custom modules at: ${functionNodeModulesDir}, exists: ${hasCustomModules}`);
+    console.log(`Function will timeout after ${timeout}ms`);
     
     // Create wrapper code with ESM modules support
     const wrapperCode = `
