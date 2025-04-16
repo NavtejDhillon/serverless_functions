@@ -54,6 +54,7 @@ export const executeFunction = async (
       ${hasCustomModules ? `
       const Module = require('module');
       const path = require('path');
+      const fs = require('fs');
       const originalResolveFilename = Module._resolveFilename;
       
       // Debug tracking to avoid excessive logging
@@ -65,32 +66,60 @@ export const executeFunction = async (
       
       // Override module resolution to check function-specific node_modules first
       Module._resolveFilename = function(request, parent, isMain, options) {
-        // Only log the first few module resolutions to avoid spam
-        if (!resolvedModules.has(request) && moduleResolutionCount < MAX_RESOLUTION_LOGS) {
-          console.log(\`Resolving module: \${request}\`);
-          resolvedModules.add(request);
-          moduleResolutionCount++;
+        // Prevent infinite recursion by tracking resolution depth per module
+        const resolutionKey = request + (parent ? parent.filename : '');
+        if (!global._moduleResolutionDepth) global._moduleResolutionDepth = {};
+        if (!global._moduleResolutionDepth[resolutionKey]) global._moduleResolutionDepth[resolutionKey] = 0;
+        global._moduleResolutionDepth[resolutionKey]++;
+        
+        // Safety check to prevent stack overflow
+        if (global._moduleResolutionDepth[resolutionKey] > 10) {
+          global._moduleResolutionDepth[resolutionKey] = 0;
+          return originalResolveFilename(request, parent, isMain, options);
         }
         
         try {
-          // For relative imports or absolute paths, use normal resolution
-          if (request.startsWith('.') || request.startsWith('/')) {
-            return originalResolveFilename(request, parent, isMain, options);
+          // Only log the first few module resolutions to avoid spam
+          if (!resolvedModules.has(request) && moduleResolutionCount < MAX_RESOLUTION_LOGS) {
+            console.log(\`Resolving module: \${request}\`);
+            resolvedModules.add(request);
+            moduleResolutionCount++;
           }
           
-          // Try to resolve from function-specific node_modules first
+          // For relative imports or absolute paths, use normal resolution
+          if (request.startsWith('.') || request.startsWith('/')) {
+            const result = originalResolveFilename(request, parent, isMain, options);
+            global._moduleResolutionDepth[resolutionKey]--;
+            return result;
+          }
+          
+          // First, check if module exists directly in our function-specific modules
+          const functionModulePath = '${functionNodeModulesDir.replace(/\\/g, '\\\\')}/' + request;
+          if (fs.existsSync(functionModulePath) || fs.existsSync(functionModulePath + '.js')) {
+            const result = originalResolveFilename(functionModulePath, parent, isMain, options);
+            global._moduleResolutionDepth[resolutionKey]--;
+            return result;
+          }
+          
+          // Then try normal require.resolve with custom paths
           try {
-            const functionModulePath = require.resolve(request, { 
-              paths: ['${functionNodeModulesDir.replace(/\\/g, '\\\\')}'] 
-            });
+            const paths = [
+              '${functionNodeModulesDir.replace(/\\/g, '\\\\')}',
+              ...(parent && parent.paths ? parent.paths : [])
+            ];
             
-            return functionModulePath;
+            const result = require.resolve(request, { paths });
+            global._moduleResolutionDepth[resolutionKey]--;
+            return result;
           } catch (moduleErr) {
-            // If not found in function modules, try the standard resolution
-            return originalResolveFilename(request, parent, isMain, options);
+            // Fall back to original resolution if not found
+            const result = originalResolveFilename(request, parent, isMain, options);
+            global._moduleResolutionDepth[resolutionKey]--;
+            return result;
           }
         } catch (err) {
           console.error(\`Error resolving module \${request}: \${err.message}\`);
+          global._moduleResolutionDepth[resolutionKey]--;
           throw err;
         }
       };` : ''}
