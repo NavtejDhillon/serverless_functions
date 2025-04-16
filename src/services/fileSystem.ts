@@ -273,11 +273,12 @@ export const installDependencies = async (
       throw new Error(`Failed to create function directory: ${err.message}`);
     }
 
-    // Create package.json
+    // Create package.json with type: module for ESM support
     const packageJson = {
       name: `function-${cleanFunctionName}`,
       version: '1.0.0',
       description: `Dependencies for function ${cleanFunctionName}`,
+      type: "module", // Set type to module for ESM support
       dependencies
     };
 

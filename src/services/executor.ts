@@ -10,7 +10,7 @@ interface ExecuteOptions {
 }
 
 /**
- * Execute a function in a sandboxed environment
+ * Execute a function in a standardized ESM environment
  */
 export const executeFunction = async (
   functionName: string,
@@ -36,8 +36,8 @@ export const executeFunction = async (
     // Get function-specific environment variables
     const functionEnv = getFunctionEnv(functionName);
     
-    // Create a wrapped script to execute the function in a sandboxed context
-    const tmpScriptPath = path.join(process.cwd(), 'tmp', `${functionName}_exec.js`);
+    // Create a wrapped script to execute the function in a sandboxed ESM context
+    const tmpScriptPath = path.join(process.cwd(), 'tmp', `${functionName}_exec.mjs`);
     
     // Get function-specific node_modules path
     const functionNodeModulesDir = path.join(FUNCTIONS_DIR, functionName, 'node_modules');
@@ -45,87 +45,13 @@ export const executeFunction = async (
     
     console.log(`Looking for custom modules at: ${functionNodeModulesDir}, exists: ${hasCustomModules}`);
     
-    // Create wrapper code with proper module resolution
+    // Create wrapper code with ESM modules support
     const wrapperCode = `
       // Set up direct output capture to bypass any buffering
       process.stdout.write('__FUNCTION_OUTPUT_START__\\n');
 
-      // Set up module resolution to include function-specific node_modules
-      ${hasCustomModules ? `
-      const Module = require('module');
-      const path = require('path');
-      const fs = require('fs');
-      const originalResolveFilename = Module._resolveFilename;
-      
-      // Debug tracking to avoid excessive logging
-      const resolvedModules = new Set();
-      let moduleResolutionCount = 0;
-      const MAX_RESOLUTION_LOGS = 3; // Reduce number of module resolution logs
-      
-      console.log('Setting up custom module resolution for dependencies');
-      
-      // Override module resolution to check function-specific node_modules first
-      Module._resolveFilename = function(request, parent, isMain, options) {
-        // Prevent infinite recursion by tracking resolution depth per module
-        const resolutionKey = request + (parent ? parent.filename : '');
-        if (!global._moduleResolutionDepth) global._moduleResolutionDepth = {};
-        if (!global._moduleResolutionDepth[resolutionKey]) global._moduleResolutionDepth[resolutionKey] = 0;
-        global._moduleResolutionDepth[resolutionKey]++;
-        
-        // Safety check to prevent stack overflow
-        if (global._moduleResolutionDepth[resolutionKey] > 10) {
-          global._moduleResolutionDepth[resolutionKey] = 0;
-          return originalResolveFilename(request, parent, isMain, options);
-        }
-        
-        try {
-          // Only log the first few module resolutions to avoid spam
-          if (!resolvedModules.has(request) && moduleResolutionCount < MAX_RESOLUTION_LOGS) {
-            console.log(\`Resolving module: \${request}\`);
-            resolvedModules.add(request);
-            moduleResolutionCount++;
-          }
-          
-          // For relative imports or absolute paths, use normal resolution
-          if (request.startsWith('.') || request.startsWith('/')) {
-            const result = originalResolveFilename(request, parent, isMain, options);
-            global._moduleResolutionDepth[resolutionKey]--;
-            return result;
-          }
-          
-          // First, check if module exists directly in our function-specific modules
-          const functionModulePath = '${functionNodeModulesDir.replace(/\\/g, '\\\\')}/' + request;
-          if (fs.existsSync(functionModulePath) || fs.existsSync(functionModulePath + '.js')) {
-            const result = originalResolveFilename(functionModulePath, parent, isMain, options);
-            global._moduleResolutionDepth[resolutionKey]--;
-            return result;
-          }
-          
-          // Then try normal require.resolve with custom paths
-          try {
-            const paths = [
-              '${functionNodeModulesDir.replace(/\\/g, '\\\\')}',
-              ...(parent && parent.paths ? parent.paths : [])
-            ];
-            
-            const result = require.resolve(request, { paths });
-            global._moduleResolutionDepth[resolutionKey]--;
-            return result;
-          } catch (moduleErr) {
-            // Fall back to original resolution if not found
-            const result = originalResolveFilename(request, parent, isMain, options);
-            global._moduleResolutionDepth[resolutionKey]--;
-            return result;
-          }
-        } catch (err) {
-          console.error(\`Error resolving module \${request}: \${err.message}\`);
-          global._moduleResolutionDepth[resolutionKey]--;
-          throw err;
-        }
-      };` : ''}
-      
-      // Clear marker to separate module resolution from actual function output
-      console.log('__MODULE_RESOLUTION_COMPLETE__');
+      // Clear marker to separate module setup from actual function output
+      console.log('__MODULE_SETUP_COMPLETE__');
       console.log('-------------------------- FUNCTION LOGS START --------------------------');
       
       // Capture original console methods
@@ -165,48 +91,60 @@ export const executeFunction = async (
         process.exit(1);
       });
       
-      // Load the function
-      const userFunction = require('${executablePath.replace(/\\/g, '\\\\')}');
-      
-      // Handle different function export patterns
-      const fnToExecute = typeof userFunction === 'function' 
-        ? userFunction 
-        : userFunction.default || userFunction.handler || userFunction.main;
-      
-      if (typeof fnToExecute !== 'function') {
-        throw new Error('No executable function found in the provided file');
+      // Set up NODE_PATH to include function-specific node_modules
+      if ('${hasCustomModules}' === 'true') {
+        process.env.NODE_PATH = [
+          '${functionNodeModulesDir.replace(/\\/g, '\\\\')}',
+          process.env.NODE_PATH
+        ].filter(Boolean).join('${path.delimiter}');
       }
       
-      // Parse input from command line
-      const input = JSON.parse(process.argv[2] || '{}');
-      
-      // Execute the function
-      Promise.resolve()
-        .then(async () => {
-          try {
-            // Execute with timeout
-            const result = await fnToExecute(input);
-            
-            // Print result after execution
-            console.log('-------------------------- FUNCTION LOGS END --------------------------');
-            console.log('__FUNCTION_RESULT_START__');
-            console.log(JSON.stringify(result, null, 2));
-            console.log('__FUNCTION_RESULT_END__');
-            
-            // Signal successful completion
-            process.stdout.write('__FUNCTION_OUTPUT_END__\\n');
-            process.exit(0);
-          } catch (error) {
-            // Print error with clear markers
-            console.error('-------------------------- FUNCTION ERROR --------------------------');
-            console.error(error.stack || error.message || error);
-            console.error('-------------------------- FUNCTION ERROR END --------------------------');
-            
-            // Signal error completion
-            process.stdout.write('__FUNCTION_OUTPUT_END__\\n');
-            process.exit(1);
-          }
-        });
+      // Import the function (using dynamic import for ESM compatibility)
+      try {
+        // In ESM context, we need to use dynamic import with URL
+        const functionPath = 'file://' + '${executablePath.replace(/\\/g, '/')}';
+        
+        // Import the function module
+        const importedModule = await import(functionPath);
+        
+        // Get the function to execute (default export or named export)
+        const fnToExecute = importedModule.default || importedModule.handler || importedModule.main;
+        
+        if (typeof fnToExecute !== 'function') {
+          throw new Error('No executable function found in the provided file. Export your function as default, or as "handler" or "main".');
+        }
+        
+        // Parse input from command line
+        const input = JSON.parse('${JSON.stringify(input).replace(/'/g, "\\'")}');
+        
+        // Execute the function
+        try {
+          const result = await fnToExecute(input);
+          
+          // Print result after execution
+          console.log('-------------------------- FUNCTION LOGS END --------------------------');
+          console.log('__FUNCTION_RESULT_START__');
+          console.log(JSON.stringify(result, null, 2));
+          console.log('__FUNCTION_RESULT_END__');
+          
+          // Signal successful completion
+          process.stdout.write('__FUNCTION_OUTPUT_END__\\n');
+          process.exit(0);
+        } catch (error) {
+          // Print error with clear markers
+          console.error('-------------------------- FUNCTION ERROR --------------------------');
+          console.error(error.stack || error.message || error);
+          console.error('-------------------------- FUNCTION ERROR END --------------------------');
+          
+          // Signal error completion
+          process.stdout.write('__FUNCTION_OUTPUT_END__\\n');
+          process.exit(1);
+        }
+      } catch (importError) {
+        console.error('Error importing function:', importError);
+        process.stdout.write('__FUNCTION_OUTPUT_END__\\n');
+        process.exit(1);
+      }
     `;
     
     fs.writeFileSync(tmpScriptPath, wrapperCode);
@@ -221,17 +159,20 @@ export const executeFunction = async (
         ...process.env,
         ...env,
         ...functionEnv,
-        // Add NODE_PATH environment variable to include function-specific modules
-        NODE_PATH: hasCustomModules 
-          ? `${functionNodeModulesDir}${path.delimiter}${process.env.NODE_PATH || ''}`
-          : process.env.NODE_PATH || ''
-      };
+        // Add Node.js flags to support ESM modules
+        NODE_OPTIONS: '--experimental-modules --es-module-specifier-resolution=node'
+      } as Record<string, string>;
+      
+      // Add NODE_PATH for modules (with type assertions)
+      if (hasCustomModules) {
+        processEnv.NODE_PATH = `${functionNodeModulesDir}${path.delimiter}${process.env.NODE_PATH || ''}`;
+      }
       
       // Log the NODE_PATH for debugging
-      console.log(`Setting NODE_PATH: ${processEnv.NODE_PATH}`);
+      console.log(`Setting NODE_PATH: ${processEnv.NODE_PATH || 'not set'}`);
       
-      // Create child process with environment variables
-      const child = spawn('node', [tmpScriptPath, JSON.stringify(input)], {
+      // Create child process with environment variables - using Node with ESM support
+      const child = spawn('node', [tmpScriptPath], {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: processEnv
       });
@@ -266,7 +207,7 @@ export const executeFunction = async (
         };
         
         // Extract function output and result separately
-        const moduleResolutionEndMarker = '__MODULE_RESOLUTION_COMPLETE__';
+        const moduleSetupEndMarker = '__MODULE_SETUP_COMPLETE__';
         const functionOutputStartMarker = 'FUNCTION LOGS START --------------------------';
         const functionOutputEndMarker = '-------------------------- FUNCTION LOGS END';
         const functionResultStartMarker = '__FUNCTION_RESULT_START__';
@@ -274,9 +215,9 @@ export const executeFunction = async (
         
         // Extract only the function's actual logs, skipping module resolution
         let functionOutput = '';
-        const moduleResolutionEnd = output.indexOf(moduleResolutionEndMarker);
-        if (moduleResolutionEnd !== -1) {
-          const logsStart = output.indexOf(functionOutputStartMarker, moduleResolutionEnd);
+        const moduleSetupEnd = output.indexOf(moduleSetupEndMarker);
+        if (moduleSetupEnd !== -1) {
+          const logsStart = output.indexOf(functionOutputStartMarker, moduleSetupEnd);
           const logsEnd = output.indexOf(functionOutputEndMarker, logsStart);
           
           if (logsStart !== -1 && logsEnd !== -1) {
@@ -307,7 +248,8 @@ export const executeFunction = async (
         resolve({
           output,
           error,
-          exitCode: 124 // Standard timeout exit code
+          exitCode: 124, // Standard timeout exit code
+          result: null
         });
       }, timeout);
     });
@@ -315,7 +257,8 @@ export const executeFunction = async (
     return {
       output: '',
       error: error.message || String(error),
-      exitCode: 1
+      exitCode: 1,
+      result: null
     };
   }
 }; 
