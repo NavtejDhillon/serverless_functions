@@ -305,9 +305,8 @@ export const installDependencies = async (
       // Continue with installation anyway
     }
 
-    // Check if package-lock.json exists to determine npm command
-    const packageLockPath = path.join(functionModulesDir, 'package-lock.json');
-    const npmCommand = fs.existsSync(packageLockPath) ? 'ci' : 'install';
+    // Always use npm install instead of npm ci
+    const npmCommand = 'install';
     
     // Install dependencies
     console.log(`Installing dependencies for function: ${cleanFunctionName}`);
