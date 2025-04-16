@@ -191,11 +191,26 @@ router.post('/name/:functionName/execute', async (req: Request, res: Response) =
     
     const result = await executeFunction(functionName, { input });
     
+    // Ensure output has both module resolution logs and function output
+    // for backward compatibility with frontend
+    const combinedOutput = result.output;
+    
+    // If we have a result property, try to parse it
+    let parsedResult = null;
+    try {
+      if (result.result) {
+        parsedResult = JSON.parse(result.result);
+      }
+    } catch (e) {
+      console.error('Error parsing function result:', e);
+    }
+    
     res.json({
       success: result.exitCode === 0,
-      output: result.output,
+      output: combinedOutput,
       error: result.error,
-      exitCode: result.exitCode
+      exitCode: result.exitCode,
+      result: parsedResult
     });
   } catch (error) {
     console.error('Error executing function:', error);

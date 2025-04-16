@@ -15,7 +15,7 @@ interface ExecuteOptions {
 export const executeFunction = async (
   functionName: string,
   options: ExecuteOptions = {}
-): Promise<{ output: string; error: string; exitCode: number }> => {
+): Promise<{ output: string; error: string; exitCode: number; result?: any }> => {
   const { input = {}, timeout = 30000, env = {} } = options;
   
   try {
@@ -47,6 +47,9 @@ export const executeFunction = async (
     
     // Create wrapper code with proper module resolution
     const wrapperCode = `
+      // Set up direct output capture to bypass any buffering
+      process.stdout.write('__FUNCTION_OUTPUT_START__\\n');
+
       // Set up module resolution to include function-specific node_modules
       ${hasCustomModules ? `
       const Module = require('module');
@@ -56,10 +59,9 @@ export const executeFunction = async (
       // Debug tracking to avoid excessive logging
       const resolvedModules = new Set();
       let moduleResolutionCount = 0;
-      const MAX_RESOLUTION_LOGS = 5;
+      const MAX_RESOLUTION_LOGS = 3; // Reduce number of module resolution logs
       
-      console.log('Setting up custom module resolution for function-specific dependencies');
-      console.log('Function modules directory: ${functionNodeModulesDir.replace(/\\/g, '\\\\')}');
+      console.log('Setting up custom module resolution for dependencies');
       
       // Override module resolution to check function-specific node_modules first
       Module._resolveFilename = function(request, parent, isMain, options) {
@@ -82,17 +84,9 @@ export const executeFunction = async (
               paths: ['${functionNodeModulesDir.replace(/\\/g, '\\\\')}'] 
             });
             
-            // Only log successful resolutions for important modules to avoid spam
-            if (moduleResolutionCount < MAX_RESOLUTION_LOGS) {
-              console.log(\`Resolved \${request} from function modules\`);
-            }
-            
             return functionModulePath;
           } catch (moduleErr) {
             // If not found in function modules, try the standard resolution
-            if (moduleResolutionCount < MAX_RESOLUTION_LOGS) {
-              console.log(\`Module \${request} not found in function modules, trying standard resolution\`);
-            }
             return originalResolveFilename(request, parent, isMain, options);
           }
         } catch (err) {
@@ -101,38 +95,48 @@ export const executeFunction = async (
         }
       };` : ''}
       
-      // Buffer console.log output to avoid interleaving with module resolution logs
+      // Clear marker to separate module resolution from actual function output
+      console.log('__MODULE_RESOLUTION_COMPLETE__');
+      console.log('-------------------------- FUNCTION LOGS START --------------------------');
+      
+      // Capture original console methods
       const originalConsoleLog = console.log;
       const originalConsoleError = console.error;
-      let userFunctionOutput = [];
-
-      // Capture user function output
-      console.log = function() {
-        const args = Array.from(arguments);
-        const message = args.map(arg => 
-          typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
-        ).join(' ');
+      const originalConsoleWarn = console.warn;
+      const originalConsoleInfo = console.info;
+      
+      // Create direct stream writing function to avoid any buffering issues
+      function directWrite(prefix, args) {
+        const formatted = args.map(arg => {
+          if (arg instanceof Error) return arg.stack || arg.message;
+          if (typeof arg === 'object') return JSON.stringify(arg, null, 2);
+          return String(arg);
+        }).join(' ');
         
-        userFunctionOutput.push(message);
-        // Still log to console for debugging
-        originalConsoleLog.apply(console, arguments);
-      };
+        process.stdout.write(\`[\${prefix}] \${formatted}\\n\`);
+        return formatted;
+      }
       
-      console.error = function() {
-        const args = Array.from(arguments);
-        const message = 'ERROR: ' + args.map(arg => 
-          typeof arg === 'object' && arg instanceof Error ? arg.stack || arg.message : 
-          typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
-        ).join(' ');
-        
-        userFunctionOutput.push(message);
-        // Still log to console for debugging
-        originalConsoleError.apply(console, arguments);
-      };
+      // Replace console methods with direct writing versions
+      console.log = function() { return directWrite('LOG', Array.from(arguments)); };
+      console.error = function() { return directWrite('ERROR', Array.from(arguments)); };
+      console.warn = function() { return directWrite('WARN', Array.from(arguments)); };
+      console.info = function() { return directWrite('INFO', Array.from(arguments)); };
       
-      // Execute the function and store its result
-      let functionResult;
+      // Get more detailed errors
+      process.on('uncaughtException', (err) => {
+        console.error('UNCAUGHT EXCEPTION:', err.stack || err);
+        process.stdout.write('__FUNCTION_OUTPUT_END__\\n');
+        process.exit(1);
+      });
       
+      process.on('unhandledRejection', (reason) => {
+        console.error('UNHANDLED REJECTION:', reason);
+        process.stdout.write('__FUNCTION_OUTPUT_END__\\n');
+        process.exit(1);
+      });
+      
+      // Load the function
       const userFunction = require('${executablePath.replace(/\\/g, '\\\\')}');
       
       // Handle different function export patterns
@@ -148,41 +152,31 @@ export const executeFunction = async (
       const input = JSON.parse(process.argv[2] || '{}');
       
       // Execute the function
-      Promise.resolve(fnToExecute(input))
-        .then(result => {
-          functionResult = result;
-          
-          // Print a separator before the actual result to help differentiate from module resolution logs
-          originalConsoleLog('\\n----- FUNCTION OUTPUT -----');
-          if (userFunctionOutput.length > 0) {
-            userFunctionOutput.forEach(line => originalConsoleLog(line));
-          } else {
-            originalConsoleLog('(No console output from function)');
+      Promise.resolve()
+        .then(async () => {
+          try {
+            // Execute with timeout
+            const result = await fnToExecute(input);
+            
+            // Print result after execution
+            console.log('-------------------------- FUNCTION LOGS END --------------------------');
+            console.log('__FUNCTION_RESULT_START__');
+            console.log(JSON.stringify(result, null, 2));
+            console.log('__FUNCTION_RESULT_END__');
+            
+            // Signal successful completion
+            process.stdout.write('__FUNCTION_OUTPUT_END__\\n');
+            process.exit(0);
+          } catch (error) {
+            // Print error with clear markers
+            console.error('-------------------------- FUNCTION ERROR --------------------------');
+            console.error(error.stack || error.message || error);
+            console.error('-------------------------- FUNCTION ERROR END --------------------------');
+            
+            // Signal error completion
+            process.stdout.write('__FUNCTION_OUTPUT_END__\\n');
+            process.exit(1);
           }
-          
-          originalConsoleLog('----- FUNCTION RESULT -----');
-          originalConsoleLog(JSON.stringify(result, null, 2));
-          originalConsoleLog('----- END FUNCTION OUTPUT -----\\n');
-          
-          // Send the result back as JSON for proper parsing
-          console.log = originalConsoleLog;  // Restore original console
-          console.log(JSON.stringify(result));
-          process.exit(0);
-        })
-        .catch(error => {
-          // Print a separator before the actual error to help differentiate from module resolution logs
-          originalConsoleError('\\n----- FUNCTION ERROR -----');
-          originalConsoleError(error.stack || error.message || error);
-          if (userFunctionOutput.length > 0) {
-            originalConsoleLog('\\n----- CONSOLE OUTPUT BEFORE ERROR -----');
-            userFunctionOutput.forEach(line => originalConsoleLog(line));
-          }
-          originalConsoleError('----- END FUNCTION ERROR -----\\n');
-          
-          // Send the error back in a structured format
-          console.error = originalConsoleError;  // Restore original console
-          console.error(error.message || error);
-          process.exit(1);
         });
     `;
     
@@ -215,12 +209,15 @@ export const executeFunction = async (
       
       // Capture output
       child.stdout.on('data', (data) => {
-        output += data.toString();
+        const chunk = data.toString();
+        output += chunk;
       });
       
       // Capture errors
       child.stderr.on('data', (data) => {
-        error += data.toString();
+        const chunk = data.toString();
+        error += chunk;
+        output += chunk; // Also add stderr to output for complete logs
       });
       
       // Handle completion
@@ -228,10 +225,49 @@ export const executeFunction = async (
         clearTimeout(timeoutId);
         fs.unlinkSync(tmpScriptPath); // Clean up temporary file
         
+        // Extract the relevant parts of the output using markers
+        const extractBetweenMarkers = (text, startMarker, endMarker) => {
+          const startIndex = text.indexOf(startMarker);
+          if (startIndex === -1) return '';
+          
+          const contentStart = startIndex + startMarker.length;
+          const endIndex = endMarker ? text.indexOf(endMarker, contentStart) : text.length;
+          
+          return endIndex === -1 ? text.substring(contentStart) : text.substring(contentStart, endIndex);
+        };
+        
+        // Extract function output and result separately
+        const moduleResolutionEndMarker = '__MODULE_RESOLUTION_COMPLETE__';
+        const functionOutputStartMarker = 'FUNCTION LOGS START --------------------------';
+        const functionOutputEndMarker = '-------------------------- FUNCTION LOGS END';
+        const functionResultStartMarker = '__FUNCTION_RESULT_START__';
+        const functionResultEndMarker = '__FUNCTION_RESULT_END__';
+        
+        // Extract only the function's actual logs, skipping module resolution
+        let functionOutput = '';
+        const moduleResolutionEnd = output.indexOf(moduleResolutionEndMarker);
+        if (moduleResolutionEnd !== -1) {
+          const logsStart = output.indexOf(functionOutputStartMarker, moduleResolutionEnd);
+          const logsEnd = output.indexOf(functionOutputEndMarker, logsStart);
+          
+          if (logsStart !== -1 && logsEnd !== -1) {
+            functionOutput = output.substring(logsStart + functionOutputStartMarker.length, logsEnd).trim();
+          }
+        }
+        
+        // Extract function result if available
+        let functionResult = extractBetweenMarkers(
+          output, 
+          functionResultStartMarker + '\n', 
+          functionResultEndMarker
+        ).trim();
+        
+        // Return the processed output
         resolve({
-          output: output.trim(),
+          output: functionOutput || output.trim(),
           error: error.trim(),
-          exitCode: code || 0
+          exitCode: code || 0,
+          result: functionResult
         });
       });
       
