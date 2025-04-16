@@ -53,13 +53,22 @@ export const executeFunction = async (
       const path = require('path');
       const originalResolveFilename = Module._resolveFilename;
       
-      // Log the module resolution for debugging
+      // Debug tracking to avoid excessive logging
+      const resolvedModules = new Set();
+      let moduleResolutionCount = 0;
+      const MAX_RESOLUTION_LOGS = 5;
+      
       console.log('Setting up custom module resolution for function-specific dependencies');
       console.log('Function modules directory: ${functionNodeModulesDir.replace(/\\/g, '\\\\')}');
       
       // Override module resolution to check function-specific node_modules first
       Module._resolveFilename = function(request, parent, isMain, options) {
-        console.log(\`Resolving module: \${request}\`);
+        // Only log the first few module resolutions to avoid spam
+        if (!resolvedModules.has(request) && moduleResolutionCount < MAX_RESOLUTION_LOGS) {
+          console.log(\`Resolving module: \${request}\`);
+          resolvedModules.add(request);
+          moduleResolutionCount++;
+        }
         
         try {
           // For relative imports or absolute paths, use normal resolution
@@ -72,11 +81,18 @@ export const executeFunction = async (
             const functionModulePath = require.resolve(request, { 
               paths: ['${functionNodeModulesDir.replace(/\\/g, '\\\\')}'] 
             });
-            console.log(\`Resolved \${request} from function modules: \${functionModulePath}\`);
+            
+            // Only log successful resolutions for important modules to avoid spam
+            if (moduleResolutionCount < MAX_RESOLUTION_LOGS) {
+              console.log(\`Resolved \${request} from function modules\`);
+            }
+            
             return functionModulePath;
           } catch (moduleErr) {
             // If not found in function modules, try the standard resolution
-            console.log(\`Module \${request} not found in function modules, trying standard resolution\`);
+            if (moduleResolutionCount < MAX_RESOLUTION_LOGS) {
+              console.log(\`Module \${request} not found in function modules, trying standard resolution\`);
+            }
             return originalResolveFilename(request, parent, isMain, options);
           }
         } catch (err) {
@@ -84,6 +100,22 @@ export const executeFunction = async (
           throw err;
         }
       };` : ''}
+      
+      // Buffer console.log output to avoid interleaving with module resolution logs
+      const originalConsoleLog = console.log;
+      const originalConsoleError = console.error;
+      let userFunctionOutput = [];
+
+      // Capture user function output
+      console.log = function() {
+        userFunctionOutput.push(Array.from(arguments).join(' '));
+        originalConsoleLog.apply(console, arguments);
+      };
+      
+      console.error = function() {
+        userFunctionOutput.push('ERROR: ' + Array.from(arguments).join(' '));
+        originalConsoleError.apply(console, arguments);
+      };
       
       const userFunction = require('${executablePath.replace(/\\/g, '\\\\')}');
       
@@ -102,11 +134,18 @@ export const executeFunction = async (
       // Execute the function
       Promise.resolve(fnToExecute(input))
         .then(result => {
-          console.log(JSON.stringify(result));
+          // Print a separator before the actual result to help differentiate from module resolution logs
+          originalConsoleLog('\\n----- FUNCTION OUTPUT -----');
+          userFunctionOutput.forEach(line => originalConsoleLog(line));
+          originalConsoleLog('----- FUNCTION RESULT -----');
+          originalConsoleLog(JSON.stringify(result));
+          originalConsoleLog('----- END FUNCTION OUTPUT -----\\n');
           process.exit(0);
         })
         .catch(error => {
-          console.error(error.message || error);
+          originalConsoleError('\\n----- FUNCTION ERROR -----');
+          originalConsoleError(error.message || error);
+          originalConsoleError('----- END FUNCTION ERROR -----\\n');
           process.exit(1);
         });
     `;
