@@ -55,10 +55,11 @@ const CreateSchedule = () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          name: description || functionName,
           functionName,
           cronExpression,
-          active,
-          description: description || undefined,
+          input: {},
+          active
         }),
       });
       

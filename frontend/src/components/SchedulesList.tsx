@@ -22,7 +22,7 @@ const SchedulesList = () => {
           throw new Error('Failed to fetch schedules');
         }
         const data = await response.json();
-        setSchedules(data);
+        setSchedules(data.data || []);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load schedules');
       } finally {
@@ -36,7 +36,7 @@ const SchedulesList = () => {
   const toggleScheduleStatus = async (id: string, currentStatus: boolean) => {
     try {
       const action = currentStatus ? 'deactivate' : 'activate';
-      const response = await fetch(`/api/schedules/id/${id}/${action}`, {
+      const response = await fetch(`/api/schedules/${id}/${action}`, {
         method: 'POST',
       });
       
@@ -44,7 +44,8 @@ const SchedulesList = () => {
         throw new Error(`Failed to ${action} schedule`);
       }
       
-      const updatedSchedule = await response.json();
+      const result = await response.json();
+      const updatedSchedule = result.data;
       
       // Update state
       setSchedules(schedules.map(schedule => 
@@ -61,7 +62,7 @@ const SchedulesList = () => {
     }
     
     try {
-      const response = await fetch(`/api/schedules/id/${id}`, {
+      const response = await fetch(`/api/schedules/${id}`, {
         method: 'DELETE',
       });
       
