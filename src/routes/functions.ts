@@ -54,12 +54,27 @@ router.post('/upload', async (req: Request, res: Response) => {
     const functionName = path.basename(fileName, extension);
     const functionPath = path.join(FUNCTIONS_DIR, fileName);
 
-    // Extract dependencies from file content
-    const fileContent = functionFile.data.toString('utf-8');
-    const dependencies = extractDependencies(fileContent);
-
-    // Move the file to the functions directory
+    // Move the file to the functions directory first
     await functionFile.mv(functionPath);
+    console.log(`Uploaded function file to ${functionPath}`);
+    
+    // Read the file from disk to ensure we have the exact content
+    const fileContent = fs.readFileSync(functionPath, 'utf-8');
+    
+    // Log the first 500 characters to see if JSDoc is present
+    console.log(`DEBUG UPLOAD: File content starts with: ${fileContent.substring(0, 500)}`);
+    console.log(`DEBUG UPLOAD: File contains @dependencies: ${fileContent.includes('@dependencies')}`);
+    
+    // If it has dependencies tag, log the section containing it
+    if (fileContent.includes('@dependencies')) {
+      const startIndex = Math.max(0, fileContent.indexOf('@dependencies') - 20);
+      const endIndex = Math.min(fileContent.length, fileContent.indexOf('@dependencies') + 200);
+      console.log(`DEBUG UPLOAD: @dependencies context: ${fileContent.substring(startIndex, endIndex)}`);
+    }
+
+    // Extract dependencies from file content
+    const dependencies = extractDependencies(fileContent);
+    console.log(`Detected dependencies for ${functionName}:`, dependencies);
     
     // Initialize response object
     const responseObject: any = {
@@ -97,20 +112,30 @@ router.post('/upload', async (req: Request, res: Response) => {
     
     // Install dependencies if any were found
     if (Object.keys(dependencies).length > 0) {
+      console.log(`Installing dependencies for ${functionName}...`);
       try {
         const installResult = await installDependencies(functionName, dependencies);
         responseObject.process.dependencyInstallation = {
           success: true,
           dependencies: dependencies,
-          output: installResult ? installResult.stdout : 'No dependencies to install'
+          output: installResult || 'No dependencies to install'
         };
+        console.log(`Dependencies installed successfully for ${functionName}`);
       } catch (error) {
+        console.error(`Error installing dependencies for ${functionName}:`, error);
         responseObject.process.dependencyInstallation = {
           success: false,
           dependencies: dependencies,
           error: error instanceof Error ? error.message : String(error)
         };
       }
+    } else {
+      console.log(`No dependencies found for ${functionName}`);
+      responseObject.process.dependencyInstallation = {
+        success: true,
+        dependencies: {},
+        output: 'No dependencies detected'
+      };
     }
 
     res.json(responseObject);
@@ -233,6 +258,79 @@ router.post('/name/:functionName/env', (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error setting environment variables:', error);
     res.status(500).json({ error: 'Failed to set environment variables' });
+  }
+});
+
+/**
+ * Analyze an existing function file and install dependencies
+ * POST /api/functions/analyze/:functionName
+ */
+router.post('/analyze/:functionName', async (req: Request, res: Response) => {
+  try {
+    const functionName = req.params.functionName;
+    
+    if (!functionName) {
+      return res.status(400).json({ error: 'Function name is required' });
+    }
+    
+    // Find the function file
+    const jsPath = path.join(FUNCTIONS_DIR, `${functionName}.js`);
+    const tsPath = path.join(FUNCTIONS_DIR, `${functionName}.ts`);
+    
+    let filePath = '';
+    if (fs.existsSync(jsPath)) {
+      filePath = jsPath;
+    } else if (fs.existsSync(tsPath)) {
+      filePath = tsPath;
+    } else {
+      return res.status(404).json({ error: `Function ${functionName} not found` });
+    }
+    
+    console.log(`Analyzing function file at ${filePath}`);
+    
+    // Read the file directly from disk
+    const fileContent = fs.readFileSync(filePath, 'utf-8');
+    
+    // Log file content for debugging
+    console.log(`File content length: ${fileContent.length} bytes`);
+    console.log(`File content starts with: ${fileContent.substring(0, 200)}...`);
+    console.log(`File has @dependencies: ${fileContent.includes('@dependencies')}`);
+    
+    // Extract dependencies using our regular function
+    const dependencies = extractDependencies(fileContent);
+    console.log(`Extracted dependencies: ${JSON.stringify(dependencies)}`);
+    
+    // Install dependencies if any were found
+    if (Object.keys(dependencies).length > 0) {
+      try {
+        const installResult = await installDependencies(functionName, dependencies);
+        res.json({
+          success: true,
+          message: `Dependencies analyzed and installed for ${functionName}`,
+          dependencies,
+          installPath: installResult
+        });
+      } catch (error) {
+        res.status(500).json({ 
+          success: false,
+          error: 'Failed to install dependencies',
+          message: error instanceof Error ? error.message : String(error),
+          dependencies
+        });
+      }
+    } else {
+      res.json({
+        success: true,
+        message: `No dependencies found for ${functionName}`,
+        dependencies: {}
+      });
+    }
+  } catch (error) {
+    console.error('Error analyzing function:', error);
+    res.status(500).json({ 
+      error: 'Failed to analyze function',
+      message: error instanceof Error ? error.message : String(error)
+    });
   }
 });
 

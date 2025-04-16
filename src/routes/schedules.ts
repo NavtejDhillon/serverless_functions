@@ -1,183 +1,230 @@
 import express from 'express';
+import { v4 as uuid } from 'uuid';
 import { 
   loadSchedules, 
   addSchedule, 
   updateSchedule, 
-  deleteSchedule,
-  activateSchedule,
+  deleteSchedule, 
+  activateSchedule, 
   deactivateSchedule,
-  Schedule
+  Schedule 
 } from '../services/scheduler';
 
 const router = express.Router();
 
-/**
- * Get all schedules
- * GET /api/schedules
- */
-router.get('/', function(req, res) {
+// Helper function to get a schedule by ID
+const getScheduleById = (scheduleId: string): Schedule | undefined => {
+  const schedules = loadSchedules();
+  return schedules.find(schedule => schedule.id === scheduleId);
+};
+
+// GET /api/schedules - Get all schedules
+router.get('/', (req, res) => {
   try {
     const schedules = loadSchedules();
-    res.json(schedules);
+    res.json({
+      success: true,
+      data: schedules
+    });
   } catch (error) {
-    console.error('Error retrieving schedules:', error);
-    res.status(500).json({ error: 'Failed to retrieve schedules' });
+    console.error('Error fetching schedules:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch schedules'
+    });
   }
 });
 
-/**
- * Create a new schedule
- * POST /api/schedules
- */
-router.post('/', function(req, res) {
+// POST /api/schedules - Create a new schedule
+router.post('/', (req, res) => {
   try {
-    const { functionName, cronExpression, input, active = true, description } = req.body;
-    
-    if (!functionName || !cronExpression) {
-      res.status(400).json({ error: 'Function name and cron expression are required' });
-      return;
+    const { name, functionName, cronExpression, input } = req.body;
+
+    // Validate required fields
+    if (!name || !functionName || !cronExpression) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: name, functionName, and cronExpression are required'
+      });
     }
-    
+
+    // Create new schedule
     const newSchedule = addSchedule({
       functionName,
       cronExpression,
-      input,
-      active,
-      description
+      input: input || {},
+      active: true,
+      description: name
     });
-    
+
     if (!newSchedule) {
-      res.status(500).json({ error: 'Failed to create schedule' });
-      return;
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to create schedule'
+      });
     }
-    
-    res.status(201).json(newSchedule);
+
+    res.status(201).json({
+      success: true,
+      data: newSchedule
+    });
   } catch (error) {
     console.error('Error creating schedule:', error);
-    res.status(500).json({ error: 'Failed to create schedule' });
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create schedule'
+    });
   }
 });
 
-/**
- * Update an existing schedule
- * PATCH /api/schedules/id/:scheduleId
- */
-router.patch('/id/:scheduleId', function(req, res) {
+// PATCH /api/schedules/:scheduleId - Update a schedule
+router.patch('/:scheduleId', (req, res) => {
   try {
-    const scheduleId = req.params.scheduleId;
-    const updates = req.body;
+    const { scheduleId } = req.params;
+    const { name, functionName, cronExpression, input } = req.body;
+
+    const updates: Partial<Schedule> = {};
     
-    if (!scheduleId) {
-      res.status(400).json({ error: 'Schedule ID is required' });
-      return;
+    if (name) updates.description = name;
+    if (functionName) updates.functionName = functionName;
+    if (cronExpression) updates.cronExpression = cronExpression;
+    if (input !== undefined) updates.input = input;
+
+    const updatedSchedule = updateSchedule(scheduleId, updates);
+
+    if (!updatedSchedule) {
+      return res.status(404).json({
+        success: false,
+        error: `Schedule with id ${scheduleId} not found`
+      });
     }
-    
-    const schedule = updateSchedule(scheduleId, updates);
-    
-    if (!schedule) {
-      res.status(404).json({ error: 'Schedule not found' });
-      return;
-    }
-    
-    res.json(schedule);
+
+    res.json({
+      success: true,
+      data: updatedSchedule
+    });
   } catch (error) {
-    console.error('Error updating schedule:', error);
-    res.status(500).json({ error: 'Failed to update schedule' });
+    console.error(`Error updating schedule:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update schedule'
+    });
   }
 });
 
-/**
- * Delete a schedule
- * DELETE /api/schedules/id/:scheduleId
- */
-router.delete('/id/:scheduleId', function(req, res) {
+// DELETE /api/schedules/:scheduleId - Delete a schedule
+router.delete('/:scheduleId', (req, res) => {
   try {
-    const scheduleId = req.params.scheduleId;
-    
-    if (!scheduleId) {
-      res.status(400).json({ error: 'Schedule ID is required' });
-      return;
-    }
-    
+    const { scheduleId } = req.params;
     const success = deleteSchedule(scheduleId);
-    
+
     if (!success) {
-      res.status(404).json({ error: 'Schedule not found or could not be deleted' });
-      return;
+      return res.status(404).json({
+        success: false,
+        error: `Schedule with id ${scheduleId} not found`
+      });
     }
-    
-    res.json({ success: true });
+
+    res.json({
+      success: true,
+      message: `Schedule ${scheduleId} deleted successfully`
+    });
   } catch (error) {
-    console.error('Error deleting schedule:', error);
-    res.status(500).json({ error: 'Failed to delete schedule' });
+    console.error(`Error deleting schedule:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete schedule'
+    });
   }
 });
 
-/**
- * Activate a schedule
- * POST /api/schedules/id/:scheduleId/activate
- */
-router.post('/id/:scheduleId/activate', function(req, res) {
+// POST /api/schedules/:scheduleId/activate - Activate a schedule
+router.post('/:scheduleId/activate', (req, res) => {
   try {
-    const scheduleId = req.params.scheduleId;
-    
-    if (!scheduleId) {
-      res.status(400).json({ error: 'Schedule ID is required' });
-      return;
-    }
-    
-    const schedules = loadSchedules();
-    const schedule = schedules.find(s => s.id === scheduleId);
-    
+    const { scheduleId } = req.params;
+    const schedule = getScheduleById(scheduleId);
+
     if (!schedule) {
-      res.status(404).json({ error: 'Schedule not found' });
-      return;
+      return res.status(404).json({
+        success: false,
+        error: `Schedule with id ${scheduleId} not found`
+      });
     }
-    
-    const success = activateSchedule(schedule);
-    
-    if (!success) {
-      res.status(500).json({ error: 'Failed to activate schedule' });
-      return;
-    }
-    
-    // Update the schedule to active status in the schedules file
+
+    // Update the schedule's active status
     const updatedSchedule = updateSchedule(scheduleId, { active: true });
     
-    res.json(updatedSchedule);
+    if (!updatedSchedule) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to activate schedule'
+      });
+    }
+
+    const activated = activateSchedule(updatedSchedule);
+
+    if (!activated) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to activate schedule'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: updatedSchedule
+    });
   } catch (error) {
-    console.error('Error activating schedule:', error);
-    res.status(500).json({ error: 'Failed to activate schedule' });
+    console.error(`Error activating schedule:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to activate schedule'
+    });
   }
 });
 
-/**
- * Deactivate a schedule
- * POST /api/schedules/id/:scheduleId/deactivate
- */
-router.post('/id/:scheduleId/deactivate', function(req, res) {
+// POST /api/schedules/:scheduleId/deactivate - Deactivate a schedule
+router.post('/:scheduleId/deactivate', (req, res) => {
   try {
-    const scheduleId = req.params.scheduleId;
-    
-    if (!scheduleId) {
-      res.status(400).json({ error: 'Schedule ID is required' });
-      return;
+    const { scheduleId } = req.params;
+    const schedule = getScheduleById(scheduleId);
+
+    if (!schedule) {
+      return res.status(404).json({
+        success: false,
+        error: `Schedule with id ${scheduleId} not found`
+      });
     }
+
+    const deactivated = deactivateSchedule(scheduleId);
     
-    const success = deactivateSchedule(scheduleId);
-    
-    if (!success) {
-      res.status(404).json({ error: 'Schedule not found' });
-      return;
+    if (!deactivated) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to deactivate schedule'
+      });
     }
-    
-    // Update the schedule to inactive status in the schedules file
+
+    // Update the schedule's active status
     const updatedSchedule = updateSchedule(scheduleId, { active: false });
     
-    res.json(updatedSchedule);
+    if (!updatedSchedule) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to update schedule status'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: updatedSchedule
+    });
   } catch (error) {
-    console.error('Error deactivating schedule:', error);
-    res.status(500).json({ error: 'Failed to deactivate schedule' });
+    console.error(`Error deactivating schedule:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to deactivate schedule'
+    });
   }
 });
 

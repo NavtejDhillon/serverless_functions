@@ -39,7 +39,36 @@ export const executeFunction = async (
     // Create a wrapped script to execute the function in a sandboxed context
     const tmpScriptPath = path.join(process.cwd(), 'tmp', `${functionName}_exec.js`);
     
+    // Get function-specific node_modules path
+    const functionNodeModulesDir = path.join(FUNCTIONS_DIR, `${functionName}_modules`, 'node_modules');
+    const hasCustomModules = fs.existsSync(functionNodeModulesDir);
+    
+    // Create wrapper code with proper module resolution
     const wrapperCode = `
+      // Set up module resolution to include function-specific node_modules
+      ${hasCustomModules ? `
+      const Module = require('module');
+      const originalResolveFilename = Module._resolveFilename;
+      
+      // Override module resolution to check function-specific node_modules first
+      Module._resolveFilename = function(request, parent, isMain, options) {
+        try {
+          // First try to resolve from function-specific node_modules
+          if (request.startsWith('.')) {
+            // For relative imports, use normal resolution
+            return originalResolveFilename(request, parent, isMain, options);
+          }
+          
+          const functionModulePath = require.resolve(request, { 
+            paths: ['${functionNodeModulesDir.replace(/\\/g, '\\\\')}'] 
+          });
+          return functionModulePath;
+        } catch (err) {
+          // Fall back to original resolution if not found
+          return originalResolveFilename(request, parent, isMain, options);
+        }
+      };` : ''}
+      
       const userFunction = require('${executablePath.replace(/\\/g, '\\\\')}');
       
       // Handle different function export patterns
@@ -77,7 +106,11 @@ export const executeFunction = async (
       const processEnv = {
         ...process.env,
         ...env,
-        ...functionEnv
+        ...functionEnv,
+        // Add NODE_PATH environment variable to include function-specific modules
+        NODE_PATH: hasCustomModules 
+          ? `${functionNodeModulesDir}${path.delimiter}${process.env.NODE_PATH || ''}`
+          : process.env.NODE_PATH || ''
       };
       
       // Create child process with environment variables

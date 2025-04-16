@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { spawn } from 'child_process';
 
 const execAsync = promisify(exec);
 
@@ -94,79 +95,271 @@ export const deleteFunction = (functionName: string): boolean => {
   }
 };
 
-// Extract dependencies from a function file
+// Extract dependencies from function code
 export const extractDependencies = (code: string): Record<string, string> => {
   const dependencies: Record<string, string> = {};
   
-  // Option 1: Extract from special comment block
-  const dependenciesMatch = code.match(/@dependencies\s*{([^}]*)}/);
-  if (dependenciesMatch && dependenciesMatch[1]) {
-    try {
-      // Parse the JSON in the comment
-      const depsJson = `{${dependenciesMatch[1]}}`;
-      Object.assign(dependencies, JSON.parse(depsJson));
-    } catch (error) {
-      console.error('Error parsing dependencies JSON:', error);
+  // Log the entire file content for debugging
+  console.log("DEBUG: Full file content (truncated):", code.length > 500 ? code.substring(0, 500) + "..." : code);
+  
+  // Simple check if the code contains @dependencies before trying regex
+  if (code.includes('@dependencies')) {
+    console.log("DEBUG: Found @dependencies tag in the code");
+    
+    // Try a simpler approach: find lines with package names and versions
+    // This looks for lines like: *   "package-name": "version",
+    const lines = code.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      // Look for lines that might be dependencies in JSDoc
+      if (trimmed.includes('"') && trimmed.includes(':') && !trimmed.startsWith('//')) {
+        console.log("DEBUG: Potential dependency line:", trimmed);
+        
+        // Try to extract package name and version with a simple regex
+        const match = trimmed.match(/"([^"]+)"\s*:\s*"([^"]+)"/);
+        if (match && match.length >= 3) {
+          const [, pkg, version] = match;
+          dependencies[pkg] = version;
+          console.log(`DEBUG: Extracted dependency: ${pkg} @ ${version}`);
+        }
+      }
+    }
+  } else {
+    console.log("DEBUG: No @dependencies tag found in the code");
+  }
+  
+  // ---- ALTERNATIVE METHOD: Directly look for require statements ----
+  
+  // Simple require pattern detection
+  const requireRegex = /(?:const|let|var)\s+.*?=\s+require\(['"](.*?)['"](?:\)|(?:, {.*})?\))/g;
+  let requireMatch;
+  
+  while ((requireMatch = requireRegex.exec(code)) !== null) {
+    if (requireMatch[1]) {
+      let pkgName = requireMatch[1].split('/')[0]; // Get base package name
+      
+      // Handle scoped packages (@org/package)
+      if (pkgName.startsWith('@') && requireMatch[1].includes('/')) {
+        // For scoped packages, include the organization and package name
+        const parts = requireMatch[1].split('/');
+        if (parts.length >= 2) {
+          pkgName = `${parts[0]}/${parts[1]}`;
+        }
+      }
+      
+      console.log(`DEBUG: Require match: ${requireMatch[1]} -> ${pkgName}`);
+      
+      // Skip built-in Node.js modules
+      const builtInModules = ['fs', 'path', 'http', 'https', 'util', 'os', 'crypto', 
+                            'querystring', 'url', 'stream', 'zlib', 'events',
+                            'buffer', 'child_process', 'cluster', 'dns', 'net',
+                            'tls', 'dgram', 'readline', 'repl', 'string_decoder',
+                            'tty', 'v8', 'vm', 'worker_threads', 'perf_hooks'];
+      
+      // Only add if not a built-in module and not a relative import
+      if (!builtInModules.includes(pkgName) && !pkgName.startsWith('.') && !pkgName.startsWith('/')) {
+        console.log(`DEBUG: Detected require for external package: ${pkgName}`);
+        if (!dependencies[pkgName]) {
+          dependencies[pkgName] = 'latest';
+        }
+      }
     }
   }
   
-  // Option 2: Extract from require statements
-  const requireMatches = code.match(/require\(['"]([^'"@][^'"]*)['"]\)/g);
-  if (requireMatches) {
-    requireMatches.forEach(match => {
-      const packageName = match.match(/require\(['"]([^'"@][^'"]*)['"]\)/)?.[1];
-      if (packageName && !packageName.startsWith('.') && !Object.keys(dependencies).includes(packageName)) {
-        dependencies[packageName] = "latest";
+  // Destructuring require pattern
+  const destructuringRequireRegex = /(?:const|let|var)\s+\{\s*([^}]+)\s*\}\s*=\s*require\(['"](.*?)['"](?:\)|(?:, {.*})?\))/g;
+  let destructuringMatch;
+  
+  while ((destructuringMatch = destructuringRequireRegex.exec(code)) !== null) {
+    if (destructuringMatch[2]) {
+      let pkgName = destructuringMatch[2].split('/')[0]; // Get base package name
+      
+      // Handle scoped packages (@org/package)
+      if (pkgName.startsWith('@') && destructuringMatch[2].includes('/')) {
+        // For scoped packages, include the organization and package name
+        const parts = destructuringMatch[2].split('/');
+        if (parts.length >= 2) {
+          pkgName = `${parts[0]}/${parts[1]}`;
+        }
       }
-    });
+      
+      console.log(`DEBUG: Destructuring require match: ${destructuringMatch[2]} -> ${pkgName}`);
+      
+      // Skip built-in Node.js modules
+      const builtInModules = ['fs', 'path', 'http', 'https', 'util', 'os', 'crypto', 
+                            'querystring', 'url', 'stream', 'zlib', 'events',
+                            'buffer', 'child_process', 'cluster', 'dns', 'net',
+                            'tls', 'dgram', 'readline', 'repl', 'string_decoder',
+                            'tty', 'v8', 'vm', 'worker_threads', 'perf_hooks'];
+      
+      // Only add if not a built-in module and not a relative import
+      if (!builtInModules.includes(pkgName) && !pkgName.startsWith('.') && !pkgName.startsWith('/')) {
+        console.log(`DEBUG: Detected destructuring require for external package: ${pkgName}`);
+        if (!dependencies[pkgName]) {
+          dependencies[pkgName] = 'latest';
+        }
+      }
+    }
   }
+  
+  // Common import/dynamic import patterns
+  const patterns = [
+    // Import statements (ES modules)
+    /import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["']([^@./][^/"]*)["']/g,
+    // Dynamic imports
+    /import\s*\(\s*["']([^@./][^/"]*)["']\s*\)/g,
+    // Scoped packages in import
+    /import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["'](@[^/]+\/[^/"]*)["']/g,
+    // Scoped packages in dynamic import
+    /import\s*\(\s*["'](@[^/]+\/[^/"]*)["']\s*\)/g
+  ];
+
+  // Extract dependencies from import statements
+  patterns.forEach(pattern => {
+    let match;
+    while ((match = pattern.exec(code)) !== null) {
+      const packageName = match[1].split('/')[0]; // Get base package name
+      console.log("DEBUG: Detected import for:", packageName);
+      
+      // Skip built-in Node.js modules
+      const builtInModules = ['fs', 'path', 'http', 'https', 'util', 'os', 'crypto', 
+                              'querystring', 'url', 'stream', 'zlib', 'events',
+                              'buffer', 'child_process', 'cluster', 'dns', 'net',
+                              'tls', 'dgram', 'readline', 'repl', 'string_decoder',
+                              'tty', 'v8', 'vm', 'worker_threads', 'perf_hooks'];
+      
+      if (builtInModules.includes(packageName)) {
+        continue;
+      }
+      
+      // Only add if not already defined (JSDoc dependencies take precedence)
+      if (!dependencies[packageName]) {
+        dependencies[packageName] = 'latest'; // Default to latest version
+      }
+    }
+  });
+  
+  // Log the extracted dependencies
+  console.log(`Extracted dependencies: ${JSON.stringify(dependencies)}`);
   
   return dependencies;
 };
 
 // Install dependencies for a function
-export const installDependencies = async (functionName: string, dependencies: Record<string, string>): Promise<{stdout: string, stderr: string} | null> => {
-  if (Object.keys(dependencies).length === 0) return null;
-  
-  const functionDir = path.join(FUNCTIONS_DIR, functionName.replace(/\.[^/.]+$/, "")); // Remove extension
-  
-  if (!fs.existsSync(functionDir)) {
-    fs.mkdirSync(functionDir, { recursive: true });
-  }
-  
-  // Create package.json
-  const packageJson = {
-    name: functionName.replace(/\.[^/.]+$/, ""),
-    version: "1.0.0",
-    dependencies: dependencies
-  };
-  
-  // Write package.json
-  fs.writeFileSync(
-    path.join(functionDir, 'package.json'),
-    JSON.stringify(packageJson, null, 2)
-  );
-  
-  // Install dependencies
-  return new Promise((resolve, reject) => {
-    const child = require('child_process').exec(`cd ${functionDir} && npm install`, (error: Error | null, stdout: string, stderr: string) => {
-      if (error) {
-        console.error(`Error installing dependencies: ${error.message}`);
-        reject(error);
-        return;
+export const installDependencies = async (
+  functionName: string,
+  dependencies: Record<string, string>
+): Promise<string | null> => {
+  try {
+    // Return early if no dependencies
+    if (Object.keys(dependencies).length === 0) {
+      console.log(`No dependencies to install for function: ${functionName}`);
+      return null;
+    }
+
+    // Clean function name (remove file extension if present)
+    const cleanFunctionName = functionName.replace(/\.[^/.]+$/, "");
+    
+    // Set up paths
+    const functionModulesDir = path.join(FUNCTIONS_DIR, cleanFunctionName);
+    const nodeModulesDir = path.join(functionModulesDir, 'node_modules');
+    
+    // Ensure the function directory exists
+    try {
+      await fs.promises.mkdir(functionModulesDir, { recursive: true });
+      console.log(`Created or confirmed function directory: ${functionModulesDir}`);
+    } catch (err) {
+      console.error(`Failed to create function directory: ${functionModulesDir}`, err);
+      throw new Error(`Failed to create function directory: ${err.message}`);
+    }
+
+    // Create package.json
+    const packageJson = {
+      name: `function-${cleanFunctionName}`,
+      version: '1.0.0',
+      description: `Dependencies for function ${cleanFunctionName}`,
+      dependencies
+    };
+
+    const packageJsonPath = path.join(functionModulesDir, 'package.json');
+    try {
+      await fs.promises.writeFile(
+        packageJsonPath,
+        JSON.stringify(packageJson, null, 2)
+      );
+      console.log(`Created package.json at ${packageJsonPath}`);
+    } catch (err) {
+      console.error(`Failed to write package.json: ${err.message}`);
+      throw new Error(`Failed to write package.json: ${err.message}`);
+    }
+
+    // Remove existing node_modules if it exists
+    try {
+      if (fs.existsSync(nodeModulesDir)) {
+        console.log(`Removing existing node_modules directory: ${nodeModulesDir}`);
+        await fs.promises.rm(nodeModulesDir, { recursive: true, force: true });
       }
-      resolve({ stdout, stderr });
-    });
+    } catch (err) {
+      console.warn(`Warning: Could not remove existing node_modules: ${err.message}`);
+      // Continue with installation anyway
+    }
 
-    // Log output in real-time
-    child.stdout.on('data', (data: string) => {
-      console.log(`[${functionName} dependencies] ${data}`);
+    // Check if package-lock.json exists to determine npm command
+    const packageLockPath = path.join(functionModulesDir, 'package-lock.json');
+    const npmCommand = fs.existsSync(packageLockPath) ? 'ci' : 'install';
+    
+    // Install dependencies
+    console.log(`Installing dependencies for function: ${cleanFunctionName}`);
+    console.log(`Dependencies: ${JSON.stringify(dependencies)}`);
+    
+    return new Promise((resolve, reject) => {
+      const install = spawn('npm', [npmCommand], {
+        cwd: functionModulesDir,
+        shell: true,
+        stdio: 'pipe'
+      });
+      
+      let output = '';
+      let errorOutput = '';
+      
+      install.stdout.on('data', (data) => {
+        const chunk = data.toString();
+        output += chunk;
+        console.log(`[npm ${npmCommand} stdout]: ${chunk.trim()}`);
+      });
+      
+      install.stderr.on('data', (data) => {
+        const chunk = data.toString();
+        errorOutput += chunk;
+        console.error(`[npm ${npmCommand} stderr]: ${chunk.trim()}`);
+      });
+      
+      install.on('close', (code) => {
+        if (code !== 0) {
+          console.error(`npm ${npmCommand} process exited with code ${code}`);
+          
+          // Check if node_modules directory was created despite errors
+          if (fs.existsSync(nodeModulesDir)) {
+            console.warn('Warning: npm exited with errors, but node_modules directory exists');
+            resolve(nodeModulesDir);
+          } else {
+            reject(new Error(`npm ${npmCommand} failed with code ${code}. Error: ${errorOutput}`));
+          }
+        } else {
+          console.log(`Successfully installed dependencies for function: ${cleanFunctionName}`);
+          resolve(nodeModulesDir);
+        }
+      });
+      
+      install.on('error', (err) => {
+        console.error(`Failed to spawn npm process: ${err.message}`);
+        reject(new Error(`Failed to execute npm ${npmCommand}: ${err.message}`));
+      });
     });
-
-    child.stderr.on('data', (data: string) => {
-      console.error(`[${functionName} dependencies] ${data}`);
-    });
-  });
+  } catch (error) {
+    console.error(`Failed to install dependencies: ${error.message}`);
+    throw error;
+  }
 };
 
 // Environment variable management
