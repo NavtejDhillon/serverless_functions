@@ -40,32 +40,48 @@ export const executeFunction = async (
     const tmpScriptPath = path.join(process.cwd(), 'tmp', `${functionName}_exec.js`);
     
     // Get function-specific node_modules path
-    const functionNodeModulesDir = path.join(FUNCTIONS_DIR, `${functionName}_modules`, 'node_modules');
+    const functionNodeModulesDir = path.join(FUNCTIONS_DIR, functionName, 'node_modules');
     const hasCustomModules = fs.existsSync(functionNodeModulesDir);
+    
+    console.log(`Looking for custom modules at: ${functionNodeModulesDir}, exists: ${hasCustomModules}`);
     
     // Create wrapper code with proper module resolution
     const wrapperCode = `
       // Set up module resolution to include function-specific node_modules
       ${hasCustomModules ? `
       const Module = require('module');
+      const path = require('path');
       const originalResolveFilename = Module._resolveFilename;
+      
+      // Log the module resolution for debugging
+      console.log('Setting up custom module resolution for function-specific dependencies');
+      console.log('Function modules directory: ${functionNodeModulesDir.replace(/\\/g, '\\\\')}');
       
       // Override module resolution to check function-specific node_modules first
       Module._resolveFilename = function(request, parent, isMain, options) {
+        console.log(\`Resolving module: \${request}\`);
+        
         try {
-          // First try to resolve from function-specific node_modules
-          if (request.startsWith('.')) {
-            // For relative imports, use normal resolution
+          // For relative imports or absolute paths, use normal resolution
+          if (request.startsWith('.') || request.startsWith('/')) {
             return originalResolveFilename(request, parent, isMain, options);
           }
           
-          const functionModulePath = require.resolve(request, { 
-            paths: ['${functionNodeModulesDir.replace(/\\/g, '\\\\')}'] 
-          });
-          return functionModulePath;
+          // Try to resolve from function-specific node_modules first
+          try {
+            const functionModulePath = require.resolve(request, { 
+              paths: ['${functionNodeModulesDir.replace(/\\/g, '\\\\')}'] 
+            });
+            console.log(\`Resolved \${request} from function modules: \${functionModulePath}\`);
+            return functionModulePath;
+          } catch (moduleErr) {
+            // If not found in function modules, try the standard resolution
+            console.log(\`Module \${request} not found in function modules, trying standard resolution\`);
+            return originalResolveFilename(request, parent, isMain, options);
+          }
         } catch (err) {
-          // Fall back to original resolution if not found
-          return originalResolveFilename(request, parent, isMain, options);
+          console.error(\`Error resolving module \${request}: \${err.message}\`);
+          throw err;
         }
       };` : ''}
       
@@ -112,6 +128,9 @@ export const executeFunction = async (
           ? `${functionNodeModulesDir}${path.delimiter}${process.env.NODE_PATH || ''}`
           : process.env.NODE_PATH || ''
       };
+      
+      // Log the NODE_PATH for debugging
+      console.log(`Setting NODE_PATH: ${processEnv.NODE_PATH}`);
       
       // Create child process with environment variables
       const child = spawn('node', [tmpScriptPath, JSON.stringify(input)], {
